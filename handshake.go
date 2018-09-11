@@ -15,7 +15,7 @@ import (
 	"net"
 	"time"
 
-	"github.com/zhangpeihao/log"
+	"lino-network/golog_z"
 )
 
 const (
@@ -56,6 +56,76 @@ func HMACsha256(msgBytes []byte, key []byte) ([]byte, error) {
 		return nil, err
 	}
 	return h.Sum(nil), nil
+}
+
+func sumBytes(buf []byte) uint32 {
+	var sum uint32
+	for _, b := range buf {
+		sum += uint32(b)
+	}
+
+	return sum
+}
+
+func getDigestOffset0(buf []byte) uint32 {
+	return (sumBytes(buf[8:12]) % 728) + 12
+}
+
+func getDigestOffset1(buf []byte) uint32 {
+	return (sumBytes(buf[772:776]) % 728) + 776
+}
+
+func getDigestOffset(buf []byte, scheme int) uint32 {
+	switch scheme {
+	case 0:
+		return getDigestOffset0(buf)
+	case 1:
+		return getDigestOffset1(buf)
+	default:
+		return getDigestOffset0(buf)
+	}
+}
+
+func validate(buf []byte) (int, error) {
+	var errs []string
+
+	for i := 0; i < 2; i++ {
+		err := validateScheme(buf, i)
+		if err != nil {
+			errs = append(errs, err.Error())
+		} else {
+			return i, nil
+		}
+	}
+
+	return 0, fmt.Errorf("all validation schemes failed: %v", errs)
+}
+
+func validateScheme(buf []byte, scheme int) error {
+	var digestOffset uint32
+	switch scheme {
+	case 0:
+		digestOffset = getDigestOffset0(buf)
+	case 1:
+		digestOffset = getDigestOffset1(buf)
+	default:
+		return fmt.Errorf("validateScheme(%d): invlaid scheme", scheme)
+	}
+
+	tempBuffer := make([]byte, RTMP_SIG_SIZE-SHA256_DIGEST_LENGTH)
+	copy(tempBuffer, buf[:digestOffset])
+	copy(tempBuffer[digestOffset:], buf[digestOffset+SHA256_DIGEST_LENGTH:])
+
+	hash, err := HMACsha256(tempBuffer, GENUINE_FP_KEY[:30])
+	if err != nil {
+		return fmt.Errorf("validateScheme(%d) calculateHMAC failed: %s", scheme, err)
+	}
+
+	if bytes.Compare(buf[digestOffset:digestOffset+SHA256_DIGEST_LENGTH], hash) != 0 {
+		return fmt.Errorf("validateScheme(%d) digest comparison failed", scheme)
+	}
+
+	return nil
 }
 
 func CreateRandomBlock(size uint) []byte {
@@ -219,7 +289,7 @@ func Handshake(c net.Conn, br *bufio.Reader, bw *bufio.Writer, timeout time.Dura
 	_, err = io.ReadAtLeast(br, s1, RTMP_SIG_SIZE)
 	CheckError(err, "Handshake Read S1")
 	logger.ModulePrintf(logHandler, log.LOG_LEVEL_DEBUG,
-		"Handshake() FMS version is %d.%d.%d.%d", s1[4], s1[5], s1[6], s1[7])
+		"Handshake() FMS version is %d.%d.%d.%d\n", s1[4], s1[5], s1[6], s1[7])
 	//	if s1[4] < 3 {
 	//		return errors.New(fmt.Sprintf("FMS version is %d.%d.%d.%d, unsupported!", s1[4], s1[5], s1[6], s1[7]))
 	//	}
@@ -286,30 +356,6 @@ func SHandshake(c net.Conn, br *bufio.Reader, bw *bufio.Writer, timeout time.Dur
 			err = r.(error)
 		}
 	}()
-	// Send S0+S1
-	err = bw.WriteByte(0x03)
-	CheckError(err, "SHandshake() Send S0")
-	s1 := CreateRandomBlock(RTMP_SIG_SIZE)
-	// Set Timestamp
-	// binary.BigEndian.PutUint32(s1, uint32(GetTimestamp()))
-	binary.BigEndian.PutUint32(s1, uint32(0))
-	// Set FlashPlayer version
-	for i := 0; i < 4; i++ {
-		s1[4+i] = FMS_VERSION[i]
-	}
-
-	serverDigestOffset := ImprintWithDigest(s1, GENUINE_FMS_KEY[:36])
-	if serverDigestOffset == 0 {
-		return errors.New("ImprintWithDigest failed")
-	}
-
-	_, err = bw.Write(s1)
-	CheckError(err, "SHandshake() Send S1")
-	if timeout > 0 {
-		c.SetWriteDeadline(time.Now().Add(timeout))
-	}
-	err = bw.Flush()
-	CheckError(err, "SHandshake() Flush S0+S1")
 
 	// Read C0
 	if timeout > 0 {
@@ -329,40 +375,17 @@ func SHandshake(c net.Conn, br *bufio.Reader, bw *bufio.Writer, timeout time.Dur
 	_, err = io.ReadAtLeast(br, c1, RTMP_SIG_SIZE)
 	CheckError(err, "SHandshake Read C1")
 	logger.ModulePrintf(logHandler, log.LOG_LEVEL_DEBUG,
-		"SHandshake() Flash player version is %d.%d.%d.%d", c1[4], c1[5], c1[6], c1[7])
+		"SHandshake() Flash player version is %d.%d.%d.%d\n", c1[4], c1[5], c1[6], c1[7])
 
-	scheme := 0
-	clientDigestOffset := ValidateDigest(c1, 8, GENUINE_FP_KEY[:30])
-	if clientDigestOffset == 0 {
-		clientDigestOffset = ValidateDigest(c1, 772, GENUINE_FP_KEY[:30])
-		if clientDigestOffset == 0 {
-			return errors.New("SHandshake C1 validating failed")
-		}
-		scheme = 1
+	// validate C1 digest scheme, if fail, return S0+S1+C1, else, return S0+S1+S2
+	// either case, ignore C2
+	scheme, err := validate(c1)
+	if err != nil {
+		logger.ModulePrintf(logHandler, log.LOG_LEVEL_WARNING, "SHandshake() Fail to validate C1, err = %s\n", err)
+		err = echoSHandshake(c, c1, bw, timeout)
+	} else {
+		err = signatureSHandshake(c, c1, scheme, bw, timeout)
 	}
-	logger.ModulePrintf(logHandler, log.LOG_LEVEL_DEBUG,
-		"SHandshake() scheme = %d", scheme)
-	digestResp, err := HMACsha256(c1[clientDigestOffset:clientDigestOffset+SHA256_DIGEST_LENGTH], GENUINE_FMS_KEY)
-	CheckError(err, "SHandshake Generate digestResp")
-
-	// Generate S2
-	s2 := CreateRandomBlock(RTMP_SIG_SIZE)
-	signatureResp, err := HMACsha256(s2[:RTMP_SIG_SIZE-SHA256_DIGEST_LENGTH], digestResp)
-	CheckError(err, "SHandshake Generate S2 HMACsha256 signatureResp")
-	DumpBuffer("SHandshake signatureResp", signatureResp, 0)
-	for index, b := range signatureResp {
-		s2[RTMP_SIG_SIZE-SHA256_DIGEST_LENGTH+index] = b
-	}
-
-	// Send S2
-	_, err = bw.Write(s2)
-	CheckError(err, "SHandshake() Send S2")
-
-	if timeout > 0 {
-		c.SetWriteDeadline(time.Now().Add(timeout))
-	}
-	err = bw.Flush()
-	CheckError(err, "SHandshake() Flush S2")
 
 	// Read C2
 	if timeout > 0 {
@@ -375,5 +398,82 @@ func SHandshake(c net.Conn, br *bufio.Reader, bw *bufio.Writer, timeout time.Dur
 	if timeout > 0 {
 		c.SetDeadline(time.Time{})
 	}
+	return
+}
+
+func echoSHandshake(c net.Conn, c1 []byte, bw *bufio.Writer, timeout time.Duration) (err error) {
+	logger.ModulePrintf(logHandler, log.LOG_LEVEL_DEBUG, "echoSHandshake()\n")
+
+	// Send S0+S1
+	err = bw.WriteByte(0x03)
+	CheckError(err, "echoSHandshake() Send S0")
+	s1 := CreateRandomBlock(RTMP_SIG_SIZE)
+	// Set Timestamp
+	// binary.BigEndian.PutUint32(s1, uint32(GetTimestamp()))
+	binary.BigEndian.PutUint32(s1, uint32(0))
+	// Set FlashPlayer version
+	for i := 0; i < 8; i++ {
+		s1[i] = 0
+	}
+	_, err = bw.Write(s1)
+	CheckError(err, "echoSHandshake() Send S1")
+
+	// Send C1
+	_, err = bw.Write(c1)
+	CheckError(err, "echoSHandshake() Send C1")
+	if timeout > 0 {
+		c.SetWriteDeadline(time.Now().Add(timeout))
+	}
+	err = bw.Flush()
+	CheckError(err, "echoSHandshake() Flush S0+S1+C1")
+
+	return
+}
+
+func signatureSHandshake(c net.Conn, c1 []byte, scheme int, bw *bufio.Writer, timeout time.Duration) (err error) {
+	logger.ModulePrintf(logHandler, log.LOG_LEVEL_DEBUG, "signatureSHandshake() scheme = %d\n", scheme)
+
+	// Send S0+S1
+	err = bw.WriteByte(0x03)
+	CheckError(err, "signatureSHandshake() Send S0")
+	s1 := CreateRandomBlock(RTMP_SIG_SIZE)
+	// Set Timestamp
+	// binary.BigEndian.PutUint32(s1, uint32(GetTimestamp()))
+	binary.BigEndian.PutUint32(s1, uint32(0))
+	// Set FlashPlayer version
+	for i := 0; i < 4; i++ {
+		s1[4+i] = FMS_VERSION[i]
+	}
+
+	serverDigestOffset := ImprintWithDigest(s1, GENUINE_FMS_KEY[:36])
+	if serverDigestOffset == 0 {
+		return errors.New("signatureSHandshake() ImprintWithDigest failed")
+	}
+
+	_, err = bw.Write(s1)
+	CheckError(err, "signatureSHandshake() Send S1")
+
+	c1off := getDigestOffset(c1, scheme)
+	digestResp, err := HMACsha256(c1[c1off:c1off+SHA256_DIGEST_LENGTH], GENUINE_FMS_KEY)
+	CheckError(err, "signatureSHandshake() Generate digestResp")
+
+	// Generate S2
+	s2 := CreateRandomBlock(RTMP_SIG_SIZE)
+	signatureResp, err := HMACsha256(s2[:RTMP_SIG_SIZE-SHA256_DIGEST_LENGTH], digestResp)
+	CheckError(err, "signatureSHandshake() Generate S2 HMACsha256 signatureResp")
+	DumpBuffer("signatureSHandshake() signatureResp", signatureResp, 0)
+	for index, b := range signatureResp {
+		s2[RTMP_SIG_SIZE-SHA256_DIGEST_LENGTH+index] = b
+	}
+
+	// Send S2
+	_, err = bw.Write(s2)
+	CheckError(err, "signatureSHandshake() Send S2")
+	if timeout > 0 {
+		c.SetWriteDeadline(time.Now().Add(timeout))
+	}
+	err = bw.Flush()
+	CheckError(err, "signatureSHandshake() Flush S0+S1+S2")
+
 	return
 }

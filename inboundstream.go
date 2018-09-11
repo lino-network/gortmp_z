@@ -5,8 +5,9 @@ package gortmp
 import (
 	"bytes"
 	"fmt"
-	"github.com/zhangpeihao/goamf"
-	"github.com/zhangpeihao/log"
+	"lino-network/goamf_z"
+	"lino-network/goflv_z"
+	"lino-network/golog_z"
 )
 
 type InboundStreamHandler interface {
@@ -84,8 +85,16 @@ func (stream *inboundStream) Close() {
 }
 
 func (stream *inboundStream) Received(message *Message) bool {
-	if message.Type == VIDEO_TYPE || message.Type == AUDIO_TYPE {
-		return false
+	if message.Type == VIDEO_TYPE || message.Type == AUDIO_TYPE || message.Type == DATA_AMF0 {
+		// form FlvTag & push into channel
+		flvTag := flv.FlvTag{
+			Type:        message.Type,
+			Timestamp:   message.Timestamp,
+			Size:        uint32(message.Buf.Len()),
+			Bytes:       message.Buf.Bytes(),
+		}
+		logger.ModulePrintln(logHandler, log.LOG_LEVEL_INFO, "msg type = ", flvTag.Type, ", size = ", flvTag.Size, ", bytes = ", len(flvTag.Bytes))
+		return true
 	}
 	var err error
 	if message.Type == COMMAND_AMF0 || message.Type == COMMAND_AMF3 {
@@ -203,6 +212,27 @@ func (stream *inboundStream) onPlay(cmd *Command) bool {
 }
 
 func (stream *inboundStream) onPublish(cmd *Command) bool {
+	// Get stream name
+	if cmd.Objects == nil || len(cmd.Objects) < 2 || cmd.Objects[1] == nil {
+		logger.ModulePrintf(logHandler, log.LOG_LEVEL_WARNING,
+			"inboundStream::onPublish: command error 1! %+v\n", cmd)
+		return true
+	}
+
+	if streamName, ok := cmd.Objects[1].(string); !ok {
+		logger.ModulePrintf(logHandler, log.LOG_LEVEL_WARNING,
+			"inboundStream::onPublish: command error 2! %+v\n", cmd)
+		return true
+	} else {
+		stream.streamName = streamName
+	}
+	// Response
+	stream.conn.conn.SetChunkSize(4096)
+	stream.conn.conn.SendUserControlMessage(EVENT_STREAM_BEGIN)
+	stream.streamReset()
+	stream.streamStart()
+	stream.rtmpSampleAccess()
+	stream.handler.OnPublishStart(stream)
 	return true
 }
 func (stream *inboundStream) onRecevieAudio(cmd *Command) bool {

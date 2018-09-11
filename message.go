@@ -4,7 +4,7 @@ package gortmp
 
 import (
 	"bytes"
-	"github.com/zhangpeihao/log"
+	"lino-network/golog_z"
 )
 
 // Message

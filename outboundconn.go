@@ -8,8 +8,8 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
-	"github.com/zhangpeihao/goamf"
-	"github.com/zhangpeihao/log"
+	"lino-network/goamf_z"
+	"lino-network/golog_z"
 	"net"
 	"time"
 )

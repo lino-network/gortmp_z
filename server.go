@@ -3,7 +3,7 @@ package gortmp
 
 import (
 	"bufio"
-	"github.com/zhangpeihao/log"
+	"lino-network/golog_z"
 	"net"
 	"time"
 )

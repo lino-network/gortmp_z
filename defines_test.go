@@ -1,7 +1,7 @@
 package gortmp
 
 import (
-	"github.com/zhangpeihao/log"
+	"lino-network/golog_z"
 	"testing"
 	"time"
 )

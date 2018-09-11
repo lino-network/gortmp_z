@@ -3,9 +3,9 @@ package main
 import (
 	"flag"
 	"fmt"
-	"github.com/zhangpeihao/goflv"
-	rtmp "github.com/zhangpeihao/gortmp"
-	"github.com/zhangpeihao/log"
+	"lino-network/goflv_z"
+	"lino-network/golog_z"
+	rtmp "lino-network/gortmp_z"
 	"os"
 	"os/signal"
 	"syscall"
@@ -91,8 +91,8 @@ func main() {
 	}
 	flag.Parse()
 
-	l := log.NewLogger(".", "server", nil, 60, 3600*24, true)
-	l.SetMainLevel(log.LOG_LEVEL_DEBUG)
+	l := log.NewLogger("", "server", nil, 60, 3600*24, false)
+	l.SetMainLevel(log.LOG_LEVEL_INFO)
 	rtmp.InitLogger(l)
 	defer l.Close()
 	handler := &ServerHandler{}

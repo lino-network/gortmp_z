@@ -7,9 +7,9 @@ go:
  - tip
 
 install:
- - go get github.com/zhangpeihao/goflv
- - go get github.com/zhangpeihao/goamf
- - go get github.com/zhangpeihao/log
+ - go get github.com/lino-network/goflv_z
+ - go get github.com/lino-network/goamf_z
+ - go get github.com/lino-network/golog_z
 
 script:
  - go test -v ./...

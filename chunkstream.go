@@ -3,7 +3,7 @@
 package gortmp
 
 import (
-	"github.com/zhangpeihao/log"
+	"lino-network/golog_z"
 )
 
 // Chunk stream
