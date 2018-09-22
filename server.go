@@ -33,9 +33,11 @@ func NewServer(network string, bindAddress string, handler ServerHandler) (*Serv
 	if err != nil {
 		return nil, err
 	}
-	logger.ModulePrintln(logHandler, log.LOG_LEVEL_DEBUG,
-		"Start listen...")
-	go server.mainLoop()
+	workerAddr, ok := server.listener.Addr().(*net.TCPAddr)
+	if ok {
+		logger.ModulePrintln(logHandler, log.LOG_LEVEL_DEBUG, "Start listen: ", workerAddr.IP)
+	}
+
 	return server, nil
 }
 
@@ -45,6 +47,23 @@ func (server *Server) Close() {
 		"Stop server")
 	server.exit = true
 	server.listener.Close()
+}
+
+func (server *Server) Serve() {
+	for {
+		c, err := server.listener.Accept()
+		if err != nil {
+			if server.exit {
+				break
+			}
+			logger.ModulePrintf(logHandler, log.LOG_LEVEL_WARNING, "Serve(): SocketServer listener error(%s), rebinding ...", err)
+			server.rebind()
+		}
+		if c != nil {
+			logger.ModulePrintf(logHandler, log.LOG_LEVEL_INFO, "Serve(): addr: %s <-> %s", c.LocalAddr(), c.RemoteAddr())
+			go server.Handshake(c)
+		}
+	}
 }
 
 func (server *Server) mainLoop() {

@@ -15,6 +15,7 @@ type InboundStreamHandler interface {
 	OnPublishStart(stream InboundStream)
 	OnReceiveAudio(stream InboundStream, on bool)
 	OnReceiveVideo(stream InboundStream, on bool)
+	OnFlvTag(stream InboundStream, flvTag *flv.FlvTag)
 }
 
 // Message stream:
@@ -85,17 +86,26 @@ func (stream *inboundStream) Close() {
 }
 
 func (stream *inboundStream) Received(message *Message) bool {
-	if message.Type == VIDEO_TYPE || message.Type == AUDIO_TYPE || message.Type == DATA_AMF0 {
+	switch message.Type {
+	case VIDEO_TYPE:
+		fallthrough
+	case AUDIO_TYPE:
+		fallthrough
+	case DATA_AMF0:
+		fallthrough
+	case DATA_AMF3:
 		// form FlvTag & push into channel
 		flvTag := flv.FlvTag{
-			Type:        message.Type,
-			Timestamp:   message.Timestamp,
-			Size:        uint32(message.Buf.Len()),
-			Bytes:       message.Buf.Bytes(),
+			Type:      message.Type,
+			Timestamp: message.Timestamp,
+			Size:      uint32(message.Buf.Len()),
+			Bytes:     message.Buf.Bytes(),
 		}
-		logger.ModulePrintln(logHandler, log.LOG_LEVEL_INFO, "msg type = ", flvTag.Type, ", size = ", flvTag.Size, ", bytes = ", len(flvTag.Bytes))
+		stream.handler.OnFlvTag(stream, &flvTag)
 		return true
+	default:
 	}
+
 	var err error
 	if message.Type == COMMAND_AMF0 || message.Type == COMMAND_AMF3 {
 		cmd := &Command{}

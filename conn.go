@@ -7,9 +7,9 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
+	"io"
 	"lino-network/goamf_z"
 	"lino-network/golog_z"
-	"io"
 	"net"
 	"sync"
 	"sync/atomic"
@@ -513,7 +513,7 @@ func (conn *conn) InboundChunkStream(id uint32) (chunkStream *InboundChunkStream
 
 func (conn *conn) CloseMediaChunkStream(id uint32) {
 	// and the id is not the index of Allocator slice
-	index := (id - 2) / 6 - 1
+	index := (id-2)/6 - 1
 	conn.mediaChunkStreamIDAllocatorLocker.Lock()
 	conn.mediaChunkStreamIDAllocator[index] = false
 	conn.mediaChunkStreamIDAllocatorLocker.Unlock()
@@ -525,7 +525,7 @@ func (conn *conn) NewTransactionID() uint32 {
 }
 
 func (conn *conn) received(message *Message) {
-	message.Dump("<<<")
+	// message.Dump("<<<")
 	tmpBuf := make([]byte, 4)
 	var err error
 	var subType byte
